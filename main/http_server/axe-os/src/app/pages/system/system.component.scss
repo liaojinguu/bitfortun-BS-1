@@ -1,0 +1,362 @@
+.overview-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.overview-table td {
+    padding: 8px 12px;
+}
+
+.overview-table td:first-child {
+    width: 200px;
+}
+
+.logs-viewport {
+  height: 70vh;
+  width: 100%;
+  display: block;
+  overflow: auto;
+  contain: strict;
+  will-change: scroll-position;
+  background-color: #0D1117;
+
+  font-family: ui-monospace, monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New";
+  white-space: pre; /* stable wrapping for terminal-like logs */
+}
+
+/* Virtual scroll internal wrapper stability */
+.logs-viewport .cdk-virtual-scroll-content-wrapper {
+  contain: content;
+}
+
+/* Each log line must have stable, exact height = logItemSize */
+.log-entry {
+  font-family: ui-monospace, monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New";
+  white-space: pre;       /* do not wrap -> stable height */
+  line-height: 18px;      /* must match logItemSize */
+  padding: 0 0 0 10px;
+  margin: 0;
+  background-color: #0D1117;
+
+  /* optional: allow horizontal scroll for long lines */
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.download-icon {
+  margin-right: 8px;
+  vertical-align: middle;
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+/* Toxic green download button (match terminal green) */
+:host ::ng-deep button.download-toxic {
+  background-color: #00bb00 !important;
+  border-color: #00bb00 !important;
+  color: #ffffff !important;
+  font-weight: 700 !important;
+}
+
+:host ::ng-deep button.download-toxic:hover {
+  background-color: #00d000 !important;
+  border-color: #00d000 !important;
+}
+
+:host ::ng-deep button.download-toxic:disabled {
+  background-color: rgba(0, 187, 0, 0.35) !important;
+  border-color: rgba(0, 187, 0, 0.35) !important;
+  color: rgba(255, 255, 255, 0.75) !important;
+}
+
+:host ::ng-deep .ansi-red { color: #ff0000 !important; }
+:host ::ng-deep .ansi-green { color: #00bb00 !important; }
+:host ::ng-deep .ansi-yellow { color: #ffff00 !important; }
+:host ::ng-deep .ansi-blue { color: #0000ff !important; }
+:host ::ng-deep .ansi-magenta { color: #ff00ff !important; }
+:host ::ng-deep .ansi-cyan { color: #00ffff !important; }
+:host ::ng-deep .ansi-white { color: #ffffff !important; }
+
+.rssi-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wifi-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 1rem;
+}
+
+.wifi-bars .bar {
+  width: 5px;
+  background-color: #ccc;
+  opacity: 0.4;
+  transition: 0.3s ease;
+}
+
+.wifi-bars .bar:nth-child(1) { height: 25%; }
+.wifi-bars .bar:nth-child(2) { height: 50%; }
+.wifi-bars .bar:nth-child(3) { height: 75%; }
+.wifi-bars .bar:nth-child(4) { height: 100%; }
+
+.wifi-bars .bar.active {
+  background-color: #4caf50;
+  opacity: 1;
+}
+
+.wifi-status-combined {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+@media (min-width: 600px) {
+  .wifi-status-combined {
+    flex-wrap: nowrap;
+  }
+}
+
+/* Card layout */
+/* Keep comments in English per your preference */
+.collab-card {
+  min-width: 520px;
+  max-width: 666px;
+  font-size: 0.80rem;
+}
+
+.collab-header {
+  font-weight: 400;
+  font-size: 0.85rem;
+  //margin-bottom: 0.75rem;
+  color: #666;
+  line-height: 1.4;
+}
+
+/* 4-column grid */
+.collab-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  align-items: start;
+}
+
+/* Column headers */
+.colhead {
+  font-weight: 600;
+  text-align: center;
+  padding-bottom: 3px;
+}
+
+.overview-table {
+  border: none !important;
+  border-collapse: collapse !important;
+}
+.overview-table td,
+.overview-table th {
+  border: none !important;
+}
+
+.collab-card.no-border {
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Cells with logos/icons */
+.logo-cell {
+  position: relative;
+  height: 100px;
+  border: 1px dashed rgba(0,0,0,.15);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+/* Make tiles look clickable without showing buttons */
+.clickable {
+  cursor: pointer;
+  transition: transform .06s ease, box-shadow .12s ease, border-color .12s ease;
+}
+.clickable:hover,
+.clickable:focus {
+  border-color: rgba(0,0,0,.25);
+  box-shadow: 0 2px 10px rgba(0,0,0,.06);
+}
+.clickable:active {
+  transform: translateY(1px);
+}
+
+/* Real image size */
+.logo {
+  max-width: 90%;
+  max-height: 77px;
+  display: block;
+}
+
+/* Big GitHub icon look (as requested: keep GitHub) */
+.gh-l {
+  width: 42px;
+  height: 42px;
+  opacity: 0.75;
+}
+
+/* Dialog responsiveness */
+@media (max-width: 780px) {
+  .collab-card { min-width: 0; }
+  .collab-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* X/Twitter row – compact, left-aligned, square tile */
+/* Keep comments in English per your preference */
+.x-cell {
+  height: 42px;                /* compact row height */
+  //padding: 8px 10px;
+  //justify-content: flex-start; /* left aligned */
+  align-items: center;
+  border: none;                /* remove outer dashed frame */
+  box-shadow: none;
+  transform: none;
+  position:relative;
+  top: -5px;
+}
+
+/* Small square tile with its own dashed border */
+.x-tile {
+  width: 24px;                 /* square frame */
+  height: 24px;
+  border: 1px dashed rgba(0,0,0,.15);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color .12s ease, box-shadow .12s ease, transform .06s ease;
+}
+
+/* Hover/focus on the whole cell should affect the tile */
+.x-cell:hover .x-tile,
+.x-cell:focus .x-tile {
+  border-color: rgba(0,0,0,.25);
+  box-shadow: 0 1px 6px rgba(0,0,0,.06);
+}
+.x-cell:active .x-tile {
+  transform: translateY(1px);
+}
+
+/* The X logo itself (24×24 as gewünscht) */
+.x-logo {
+  width: 16px;
+  height: 16px;
+  display: block;
+  pointer-events: none; /* click handled by the cell */
+}
+
+.logs-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap; /* desktop */
+  gap: 15px;
+}
+
+.logs-header-left {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 15px;
+}
+
+.logs-header-title {
+  white-space: nowrap;
+}
+
+.logs-header-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+
+.logs-filter-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+.logs-filter-label {
+  white-space: nowrap;
+  margin-right: 12px;
+}
+
+.logs-filter-input {
+  flex: 0 1 560px;
+  min-width: 260px;
+  margin-right: 10px; /* MUST stay 10px to Clear Filter */
+}
+
+.logs-filter-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: nowrap;
+}
+
+/* If the header needs to wrap, keep the right side starting from the left */
+@media (max-width: 1150px) {
+  .logs-header {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .logs-header-right {
+    margin-left: 0;
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  .logs-filter-row {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    align-items: center; /* align buttons to input height */
+    gap: 11px 0; /* vertical spacing only when wrapping */
+  }
+
+  .logs-filter-input {
+    /* allow the input to shrink so buttons don't get pushed down prematurely */
+    flex: 1 1 310px;
+    min-width: 120px;
+  }
+}
+
+/* <=780px: ONLY the download button drops below the input, aligned with the input start */
+@media (max-width: 780px) {
+  .logs-filter-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas:
+      "label input clear"
+      ". download download";
+    align-items: center;
+    column-gap: 10px; /* keep 10px spacing between input and Clear Filter */
+    row-gap: 10px;
+  }
+
+  .logs-filter-label { grid-area: label; margin-right: 12px; }
+  .logs-filter-input  { grid-area: input; width: 100%; min-width: 0; margin-right: 0; }
+
+  .logs-filter-actions {
+    display: contents; /* let the buttons participate in the grid */
+  }
+
+  .logs-filter-actions > :first-child {
+    grid-area: clear;
+  }
+
+  :host ::ng-deep .logs-filter-actions > button.download-toxic {
+    grid-area: download;
+    justify-self: start; /* align to the input start */
+  }
+}

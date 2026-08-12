@@ -1,0 +1,134 @@
+# This file was generated using idf.py save-defconfig or menuconfig [D] key. It can be edited manually.
+# Espressif IoT Development Framework (ESP-IDF) 5.5.3 Project Minimal Configuration
+#
+CONFIG_IDF_TARGET="esp32s3"
+
+#
+# Serial flasher config
+#
+CONFIG_ESPTOOLPY_NO_STUB=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+# end of Serial flasher config
+
+#
+# Partition Table
+#
+CONFIG_PARTITION_TABLE_CUSTOM=y
+# end of Partition Table
+
+#
+# Stratum Configuration
+#
+CONFIG_STRATUM_URL="solo.ckpool.org"
+CONFIG_STRATUM_USER="1PPvtJLC9QX2shnnZAtaeo4sFbJDrKPqwE"
+# end of Stratum Configuration
+
+#
+# Component config
+#
+
+#
+# ESP-TLS
+#
+CONFIG_ESP_TLS_USE_DS_PERIPHERAL=n
+# end of ESP-TLS
+
+#
+# ESP-Driver:I2C Configurations
+#
+CONFIG_I2C_ISR_IRAM_SAFE=y
+# end of ESP-Driver:I2C Configurations
+
+#
+# Ethernet
+#
+CONFIG_ETH_SPI_ETHERNET_W5500=y
+# end of Ethernet
+
+#
+# HTTP Server
+#
+CONFIG_HTTPD_MAX_URI_LEN=2048
+CONFIG_HTTPD_WS_SUPPORT=y
+# end of HTTP Server
+
+#
+# ESP PSRAM
+#
+CONFIG_SPIRAM=y
+
+#
+# SPI RAM config
+#
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_USE_CAPS_ALLOC=y
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+# end of SPI RAM config
+# end of ESP PSRAM
+
+#
+# ESP System Settings
+#
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP_TASK_WDT_INIT=n
+# end of ESP System Settings
+
+#
+# Wi-Fi
+#
+CONFIG_ESP_WIFI_11KV_SUPPORT=y
+# end of Wi-Fi
+
+#
+# LWIP
+#
+CONFIG_LWIP_MAX_SOCKETS=16
+CONFIG_LWIP_STATS=y
+# end of LWIP
+
+#
+# mbedTLS
+#
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=16384
+
+#
+# mbedTLS v3.x related
+#
+CONFIG_MBEDTLS_SSL_PROTO_TLS1_3=y
+# end of mbedTLS v3.x related
+
+CONFIG_MBEDTLS_POLY1305_C=y
+CONFIG_MBEDTLS_CHACHA20_C=y
+CONFIG_MBEDTLS_CHACHAPOLY_C=y
+# end of mbedTLS
+
+#
+# SPIFFS Configuration
+#
+CONFIG_SPIFFS_OBJ_NAME_LEN=64
+# end of SPIFFS Configuration
+
+#
+# LVGL configuration
+#
+
+#
+# Color settings
+#
+CONFIG_LV_COLOR_16_SWAP=y
+# end of Color settings
+
+#
+# Font usage
+#
+
+#
+# Enable built-in fonts
+#
+CONFIG_LV_FONT_MONTSERRAT_10=y
+# end of Enable built-in fonts
+# end of Font usage
+# end of LVGL configuration
+# end of Component config

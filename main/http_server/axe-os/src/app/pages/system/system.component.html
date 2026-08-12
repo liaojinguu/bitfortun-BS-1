@@ -1,0 +1,142 @@
+<ng-container *ngIf="info$ | async as info">
+
+  <nb-card *ngIf="!showLogs">
+    <nb-card-header>{{ 'SYSTEM.OVERVIEW' | translate }}</nb-card-header>
+    <nb-card-body>
+      <table class="overview-table">
+        <tr>
+          <td><b>{{ 'SYSTEM.MODEL' | translate }}:</b></td>
+          <td>{{ info.deviceModel }} ({{ info.ASICModel }})</td>
+        </tr>
+        <tr>
+          <td><b>{{ 'SYSTEM.UPTIME' | translate }}:</b></td>
+          <td>
+            <span [title]="getBootTime(info.uptimeSeconds) | date:'medium'">
+              {{ info.uptimeSeconds | dateAgo }}
+            </span>&nbsp;&nbsp;&nbsp;
+
+            <button nbButton size="small" (click)="restart()" status="danger">
+              {{ 'SYSTEM.RESTART' | translate }}
+            </button>
+            &nbsp;
+            <button nbButton size="small" (click)="shutdown()" status="warning">
+              {{ 'SYSTEM.SHUTDOWN' | translate }}
+            </button>
+          </td>
+        </tr>
+        <tr>
+          <td><b>{{ 'SYSTEM.LAST_RESET_REASON' | translate }}:</b></td>
+          <td>{{ info.lastResetReason | translate }}</td>
+        </tr>
+        <tr>
+          <td><b>{{ 'SYSTEM.WIFI_STATUS' | translate }}:</b></td>
+          <td>
+            <span class="wifi-status-combined">
+              {{ info.wifiStatus | translate }}
+              <span class="rssi-inline">
+                ({{ info.wifiRSSI }} dBm)
+                <div class="wifi-bars" [attr.title]="getRssiTooltip(info.wifiRSSI)">
+                  <div class="bar" [class.active]="info.wifiRSSI > -85"></div>
+                  <div class="bar" [class.active]="info.wifiRSSI > -75"></div>
+                  <div class="bar" [class.active]="info.wifiRSSI > -65"></div>
+                  <div class="bar" [class.active]="info.wifiRSSI > -55"></div>
+                </div>
+              </span>
+            </span>
+          </td>
+        </tr>
+        <tr>
+          <td><b>{{ 'SYSTEM.MAC_ADDRESS' | translate }}:</b></td>
+          <td>{{ info.macAddr }}</td>
+        </tr>
+        <tr>
+          <td><b>{{ 'SYSTEM.FREE_HEAP_MEMORY' | translate }}:</b></td>
+          <td>SRAM: {{ info.freeHeapInt }}, PSRAM: {{ info.freeHeap }}</td>
+        </tr>
+      
+      </table>
+    </nb-card-body>
+  </nb-card>
+
+  <!-- LOGS CARD: always visible (button always there), content only if showLogs -->
+  <nb-card class="mt-4">
+    <nb-card-header>
+      <div class="logs-header">
+        <div class="logs-header-left">
+          <div class="logs-header-title">{{ 'SYSTEM.REALTIME_LOGS' | translate }}</div>
+
+          <button nbButton size="small" status="primary" (click)="toggleLogs()">
+            {{ showLogs ? ('SYSTEM.HIDE' | translate) : ('SYSTEM.SHOW' | translate) }}
+            {{ 'SYSTEM.LOGS' | translate }}
+          </button>
+
+          <button nbButton
+                  size="small"
+                  status="warning"
+                  (click)="toggleScrolling()"
+                  *ngIf="showLogs">
+            {{ stopScroll ? ('SYSTEM.START' | translate) : ('SYSTEM.STOP' | translate) }}
+            {{ 'SYSTEM.SCROLLING' | translate }}
+          </button>
+        </div>
+
+        <div class="logs-header-right" *ngIf="showLogs">
+          <div class="logs-filter-row">
+            <label class="logs-filter-label" for="logFilterText">{{ 'SYSTEM.FILTER' | translate }}</label>
+
+            <input id="logFilterText"
+                   class="logs-filter-input"
+                   type="text"
+                   [(ngModel)]="logFilterText"
+                   (ngModelChange)="applyFilter(); onFilterMaybeScroll()"
+                   [placeholder]="'SYSTEM.FILTER_LOGS_PLACEHOLDER' | translate" />
+
+            <div class="logs-filter-actions">
+              <button nbButton
+                      size="small"
+                      status="info"
+                      (click)="logFilterText = ''; applyFilter(); onFilterMaybeScroll()">
+                {{ 'SYSTEM.CLEAR_FILTER' | translate }}
+              </button>
+
+              <button nbButton
+                      size="small"
+                      status="success"
+                      class="download-toxic"
+                      [disabled]="logs.length === 0"
+                      (click)="downloadLogs()">
+                <nb-icon icon="download-outline" class="download-icon" aria-hidden="true"></nb-icon>
+                {{ 'SYSTEM.DOWNLOAD_LOGS' | translate }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </nb-card-header>
+
+    <nb-alert
+      status="info"
+      *ngIf="logsLockedByOtherTab && !showLogs"
+      class="mt-2">
+      {{ 'SYSTEM.LOGS_ALREADY_OPEN_OTHER_TAB' | translate }}
+    </nb-alert>
+
+    <nb-card-body *ngIf="showLogs">
+      <cdk-virtual-scroll-viewport
+        class="logs-viewport"
+        [itemSize]="logItemSize"
+        [minBufferPx]="minBufferPx"
+        [maxBufferPx]="maxBufferPx"
+        #viewport>
+
+        <div
+          class="log-entry"
+          *cdkVirtualFor="let log of filteredLogs; trackBy: trackByLogId"
+          [innerHTML]="(formatLogForUi(log.text) | ANSI)">
+        </div>
+
+      </cdk-virtual-scroll-viewport>
+    </nb-card-body>
+  </nb-card>
+
+</ng-container>

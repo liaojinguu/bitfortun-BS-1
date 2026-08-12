@@ -1,0 +1,356 @@
+
+#include "esp_http_server.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+
+#include "dns_server.h"
+
+#include "global_state.h"
+#include "nvs_config.h"
+#include "recovery_page.h"
+#include "http_server.h"
+#include "http_cors.h"
+#include "http_utils.h"
+#include "http_websocket.h"
+#include "handler_influx.h"
+#include "handler_swarm.h"
+#include "handler_can_swarm.h"
+#include "handler_system.h"
+#include "handler_ota.h"
+#include "handler_restart.h"
+#include "handler_shutdown.h"
+#include "handler_file.h"
+#include "handler_alert.h"
+#include "handler_otp.h"
+#include "macros.h"
+
+#pragma GCC diagnostic error "-Wall"
+#pragma GCC diagnostic error "-Wextra"
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+
+bool enter_recovery = false;
+
+static const char *TAG = "http_server";
+
+httpd_handle_t http_server = NULL;
+
+extern int websocket_fd;
+
+/* Function for stopping the webserver */
+/*
+static void stop_webserver(httpd_handle_t server)
+{
+    if (http_server) {
+        // Stop the httpd server
+        httpd_stop(http_server);
+    }
+}
+*/
+
+
+/* Recovery handler */
+static esp_err_t rest_recovery_handler(httpd_req_t *req)
+{
+    // close connection when out of scope
+    ConGuard g(http_server, req);
+
+    if (is_network_allowed(req) != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+    }
+    httpd_resp_set_type(req, "text/html; charset=UTF-8");
+    httpd_resp_send(req, recovery_page, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static esp_err_t handle_options_request(httpd_req_t *req)
+{
+    // close connection when out of scope
+    ConGuard g(http_server, req);
+
+    if (is_network_allowed(req) != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+    }
+
+    // Set CORS headers for OPTIONS request
+    if (set_cors_headers(req) != ESP_OK) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    // Send a blank response for OPTIONS request
+    httpd_resp_send(req, NULL, 0);
+
+    return ESP_OK;
+}
+
+// HTTP Error (404) Handler - Redirects all requests to the root page
+static esp_err_t http_404_error_handler(httpd_req_t *req, httpd_err_code_t err)
+{
+    // close connection when out of scope
+    ConGuard g(http_server, req);
+
+    // Set status
+    httpd_resp_set_status(req, "302 Temporary Redirect");
+    // Redirect to the "/" root directory
+    httpd_resp_set_hdr(req, "Location", "/");
+    // iOS requires content in the response to detect a captive portal, simply redirecting is not sufficient.
+    httpd_resp_send(req, "Redirect to the captive portal", HTTPD_RESP_USE_STRLEN);
+
+    ESP_LOGI(TAG, "Redirecting to root");
+    return ESP_OK;
+}
+
+static void http_close_cb(void* hd, int sockfd)
+{
+    // If our websocket socket is being closed, reset logging
+    if (sockfd == websocket_fd) {
+        ESP_LOGI(TAG, "resetting websocket %d", sockfd);
+        websocket_reset();
+    }
+    ESP_LOGD(TAG, "http_close_cb: %d", sockfd);
+    if (sockfd >= 0) {
+        (void)close(sockfd);
+    }
+}
+
+static esp_err_t http_open_cb(void* hd, int sockfd) {
+    ESP_LOGD(TAG, "http_open_cb: %d", sockfd);
+    return ESP_OK;
+}
+
+esp_err_t start_rest_server(void * pvParameters)
+{
+    const char *base_path = "";
+
+    if (init_fs() != ESP_OK) {
+        // Unable to initialize the web app filesystem.
+        // Enter recovery mode
+        enter_recovery = true;
+    }
+
+    if (!base_path) {
+        ESP_LOGE(TAG, "wrong base path");
+        return ESP_FAIL;
+    }
+
+    rest_server_context_t *rest_context = (rest_server_context_t*) CALLOC(1, sizeof(rest_server_context_t));
+    if (!rest_context) {
+        ESP_LOGE(TAG, "No memory for rest context");
+        return ESP_FAIL;
+    }
+
+    strlcpy(rest_context->base_path, base_path, sizeof(rest_context->base_path));
+
+
+
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.uri_match_fn = httpd_uri_match_wildcard;
+    config.max_uri_handlers = 50;
+    config.lru_purge_enable = true;
+    config.max_open_sockets = 10;
+    config.stack_size = 12288;
+    config.keep_alive_enable = false;
+    config.recv_wait_timeout = 5;
+    config.send_wait_timeout = 5;
+    config.close_fn = http_close_cb;
+    config.open_fn = http_open_cb;
+
+
+    ESP_LOGI(TAG, "Starting HTTP Server");
+    if (httpd_start(&http_server, &config) != ESP_OK) {
+        ESP_LOGE(TAG, "Start server failed");
+        free(rest_context);
+        return ESP_FAIL;
+    }
+
+    httpd_uri_t recovery_explicit_get_uri = {
+        .uri = "/recovery", .method = HTTP_GET, .handler = rest_recovery_handler, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &recovery_explicit_get_uri);
+
+    /* URI handler for fetching system info */
+    httpd_uri_t system_info_get_uri = {
+        .uri = "/api/system/info", .method = HTTP_GET, .handler = GET_system_info, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &system_info_get_uri);
+
+        /* URI handler for fetching system info */
+    httpd_uri_t system_asic_get_uri = {
+        .uri = "/api/system/asic", .method = HTTP_GET, .handler = GET_system_asic, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &system_asic_get_uri);
+
+    /* URI handler for fetching system info */
+    httpd_uri_t influx_info_get_uri = {
+        .uri = "/api/influx/info", .method = HTTP_GET, .handler = GET_influx_info, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &influx_info_get_uri);
+
+    httpd_uri_t swarm_get_uri = {.uri = "/api/swarm/info", .method = HTTP_GET, .handler = GET_swarm, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &swarm_get_uri);
+
+    httpd_uri_t update_swarm_uri = {
+        .uri = "/api/swarm", .method = HTTP_PATCH, .handler = PATCH_update_swarm, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &update_swarm_uri);
+
+    httpd_uri_t swarm_options_uri = {
+        .uri = "/api/swarm",
+        .method = HTTP_OPTIONS,
+        .handler = handle_options_request,
+        .user_ctx = NULL,
+    };
+    httpd_register_uri_handler(http_server, &swarm_options_uri);
+
+    httpd_uri_t can_slaves_get_uri = {
+        .uri = "/api/can/slaves", .method = HTTP_GET, .handler = GET_can_slaves, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &can_slaves_get_uri);
+
+    httpd_uri_t can_slaves_options_uri = {
+        .uri = "/api/can/slaves", .method = HTTP_OPTIONS, .handler = handle_options_request, .user_ctx = NULL};
+    httpd_register_uri_handler(http_server, &can_slaves_options_uri);
+
+    httpd_uri_t can_slave_patch_uri = {
+        .uri = "/api/can/slaves/*", .method = HTTP_PATCH, .handler = PATCH_can_slave, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &can_slave_patch_uri);
+
+    httpd_uri_t can_slave_delete_uri = {
+        .uri = "/api/can/slaves/*", .method = HTTP_DELETE, .handler = DELETE_can_slave, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &can_slave_delete_uri);
+
+    httpd_uri_t can_slave_wildcard_options_uri = {
+        .uri = "/api/can/slaves/*", .method = HTTP_OPTIONS, .handler = handle_options_request, .user_ctx = NULL};
+    httpd_register_uri_handler(http_server, &can_slave_wildcard_options_uri);
+
+    httpd_uri_t can_slave_restart_uri = {
+        .uri = "/api/can/slaves/*/restart", .method = HTTP_POST, .handler = POST_can_slave_restart, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &can_slave_restart_uri);
+
+    httpd_uri_t can_slave_shutdown_uri = {
+        .uri = "/api/can/slaves/*/shutdown", .method = HTTP_POST, .handler = POST_can_slave_shutdown, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &can_slave_shutdown_uri);
+
+    httpd_uri_t can_slave_identify_uri = {
+        .uri = "/api/can/slaves/*/identify", .method = HTTP_POST, .handler = POST_can_slave_identify, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &can_slave_identify_uri);
+
+    httpd_uri_t system_restart_uri = {
+        .uri = "/api/system/restart", .method = HTTP_POST, .handler = POST_restart, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &system_restart_uri);
+
+    httpd_uri_t system_restart_options_uri = {
+        .uri = "/api/system/restart",
+        .method = HTTP_OPTIONS,
+        .handler = handle_options_request,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(http_server, &system_restart_options_uri);
+
+    httpd_uri_t system_reset_stats_uri = {
+        .uri = "/api/system/reset-stats", .method = HTTP_POST, .handler = POST_reset_stats, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &system_reset_stats_uri);
+
+    httpd_uri_t system_shutdown_uri = {
+        .uri = "/api/system/shutdown", .method = HTTP_POST, .handler = POST_shutdown, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &system_shutdown_uri);
+
+    httpd_uri_t system_shutdown_options_uri = {
+        .uri = "/api/system/shutdown",
+        .method = HTTP_OPTIONS,
+        .handler = handle_options_request,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(http_server, &system_shutdown_options_uri);
+
+    httpd_uri_t update_system_settings_uri = {
+        .uri = "/api/system", .method = HTTP_PATCH, .handler = PATCH_update_settings, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &update_system_settings_uri);
+
+    httpd_uri_t update_influx_settings_uri = {
+        .uri = "/api/influx", .method = HTTP_PATCH, .handler = PATCH_update_influx, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &update_influx_settings_uri);
+
+    httpd_uri_t system_options_uri = {
+        .uri = "/api/system",
+        .method = HTTP_OPTIONS,
+        .handler = handle_options_request,
+        .user_ctx = NULL,
+    };
+    httpd_register_uri_handler(http_server, &system_options_uri);
+
+    httpd_uri_t update_otp_uri = {
+        .uri = "/api/otp", .method = HTTP_PATCH, .handler = PATCH_update_otp, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &update_otp_uri);
+
+    httpd_uri_t post_otp_uri = {
+        .uri = "/api/otp", .method = HTTP_POST, .handler = POST_create_otp, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &post_otp_uri);
+
+    httpd_uri_t post_otp_session_uri = {
+        .uri = "/api/otp/session", .method = HTTP_POST, .handler = POST_create_otp_session, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &post_otp_session_uri);
+
+    httpd_uri_t get_otp_status = {
+        .uri = "/api/otp/status", .method = HTTP_GET, .handler = GET_otp_status, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &get_otp_status);
+
+    /* URI handler for fetching Discord alert settings */
+    httpd_uri_t alert_info_get_uri = {
+        .uri = "/api/alert/info", .method = HTTP_GET, .handler = GET_alert_info, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &alert_info_get_uri);
+
+    /* URI handler for updating Discord alert settings */
+    httpd_uri_t alert_update_patch_uri = {
+        .uri = "/api/alert/update", .method = HTTP_POST, .handler = POST_update_alert, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &alert_update_patch_uri);
+
+    /* URI handler for test webhook */
+    httpd_uri_t alert_test_uri = {
+        .uri = "/api/alert/test", .method = HTTP_POST, .handler = POST_test_alert, .user_ctx = rest_context};
+    httpd_register_uri_handler(http_server, &alert_test_uri);
+
+    httpd_uri_t update_post_ota_firmware = {
+        .uri = "/api/system/OTA", .method = HTTP_POST, .handler = POST_OTA_update, .user_ctx = NULL};
+    httpd_register_uri_handler(http_server, &update_post_ota_firmware);
+
+    httpd_uri_t update_post_ota_www = {
+        .uri = "/api/system/OTAWWW", .method = HTTP_POST, .handler = POST_WWW_update, .user_ctx = NULL};
+    httpd_register_uri_handler(http_server, &update_post_ota_www);
+
+    httpd_uri_t ws = {.uri = "/api/ws", .method = HTTP_GET, .handler = echo_handler, .user_ctx = NULL, .is_websocket = true};
+    httpd_register_uri_handler(http_server, &ws);
+
+    httpd_uri_t update_post_ota_from_url = {
+        .uri = "/api/system/OTA/github", .method = HTTP_POST, .handler = POST_OTA_update_from_url, .user_ctx = NULL};
+    httpd_register_uri_handler(http_server, &update_post_ota_from_url);
+
+    httpd_uri_t update_get_ota_status = {
+        .uri = "/api/system/OTA/github", .method = HTTP_GET, .handler = GET_OTA_status, .user_ctx = NULL};
+    httpd_register_uri_handler(http_server, &update_get_ota_status);
+
+    httpd_uri_t update_ota_github_options_uri = {
+        .uri = "/api/system/OTA/github",
+        .method = HTTP_OPTIONS,
+        .handler = handle_options_request,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(http_server, &update_ota_github_options_uri);
+
+    if (enter_recovery) {
+        /* Make default route serve Recovery */
+        httpd_uri_t recovery_implicit_get_uri = {
+            .uri = "/*", .method = HTTP_GET, .handler = rest_recovery_handler, .user_ctx = rest_context};
+        httpd_register_uri_handler(http_server, &recovery_implicit_get_uri);
+
+    } else {
+        /* URI handler for getting web http_server files */
+        httpd_uri_t common_get_uri = {
+            .uri = "/*", .method = HTTP_GET, .handler = rest_common_get_handler, .user_ctx = rest_context};
+        httpd_register_uri_handler(http_server, &common_get_uri);
+    }
+
+    httpd_register_err_handler(http_server, HTTPD_404_NOT_FOUND, http_404_error_handler);
+
+    websocket_start();
+
+    // Start the DNS server that will redirect all queries to the softAP IP
+    dns_server_config_t dns_config = DNS_SERVER_CONFIG_SINGLE("*" /* all A queries */, "WIFI_AP_DEF" /* softAP netif ID */);
+    start_dns_server(&dns_config);
+
+    return ESP_OK;
+}

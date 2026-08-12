@@ -1,0 +1,576 @@
+#include <math.h>
+#include "esp_ota_ops.h"
+#include "esp_http_server.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+
+#include "ArduinoJson.h"
+
+#include "psram_allocator.h"
+#include "global_state.h"
+#include "nvs_config.h"
+#include "http_cors.h"
+#include "http_utils.h"
+
+#include "ping_task.h"
+#include "tasks/can_master_task.h"
+
+static const char *TAG = "http_system";
+
+#define VR_FREQUENCY_ENABLED
+
+uint64_t getDuplicateHWNonces();
+
+/* Simple handler for getting system handler */
+esp_err_t GET_system_info(httpd_req_t *req)
+{
+    // close connection when out of scope
+    ConGuard g(http_server, req);
+
+    if (is_network_allowed(req) != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+    }
+
+    httpd_resp_set_type(req, "application/json");
+
+    // Set CORS headers
+    if (set_cors_headers(req) != ESP_OK) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    // Parse optional start_timestamp parameter
+    const uint64_t DEFAULT_HISTORY_SPAN_MS = 3600ULL * 1000ULL;
+    const uint64_t MAX_HISTORY_SPAN_MS = 3ULL * 3600ULL * 1000ULL;
+
+    uint64_t start_timestamp = 0;
+    uint64_t current_timestamp = 0;
+    uint32_t history_limit = 0;
+    bool history_requested = false;
+    uint64_t history_span_ms = DEFAULT_HISTORY_SPAN_MS;
+    char query_str[128];
+    if (httpd_req_get_url_query_str(req, query_str, sizeof(query_str)) == ESP_OK) {
+        char param[64];
+        if (httpd_query_key_value(query_str, "ts", param, sizeof(param)) == ESP_OK) {
+            start_timestamp = strtoull(param, NULL, 10);
+            if (start_timestamp) {
+                history_requested = true;
+            }
+        }
+        if (httpd_query_key_value(query_str, "limit", param, sizeof(param)) == ESP_OK) {
+            history_limit = strtoul(param, NULL, 10);
+            if (history_limit > 1000) {
+                history_limit = 1000;
+            }
+        }
+        if (httpd_query_key_value(query_str, "history_span", param, sizeof(param)) == ESP_OK) {
+            history_span_ms = strtoull(param, NULL, 10);
+            if (history_span_ms > MAX_HISTORY_SPAN_MS) {
+                history_span_ms = MAX_HISTORY_SPAN_MS;
+            }
+            if (history_span_ms == 0) {
+                history_span_ms = DEFAULT_HISTORY_SPAN_MS;
+            }
+        }
+        if (httpd_query_key_value(query_str, "cur", param, sizeof(param)) == ESP_OK) {
+            current_timestamp = strtoull(param, NULL, 10);
+            ESP_LOGI(TAG, "cur: %llu", current_timestamp);
+        }
+    }
+
+    Board* board   = SYSTEM_MODULE.getBoard();
+    History* history = SYSTEM_MODULE.getHistory();
+
+    PSRAMAllocator allocator;
+    JsonDocument doc(&allocator);
+
+    bool shutdown = POWER_MANAGEMENT_MODULE.isShutdown();
+
+    // Get configuration strings from NVS
+    char *ssid               = Config::getWifiSSID();
+    char *hostname           = Config::getHostname();
+    char *stratumURL         = Config::getStratumURL();
+    char *stratumUser        = Config::getStratumUser();
+    char *fallbackStratumURL = Config::getStratumFallbackURL();
+    char *fallbackStratumUser= Config::getStratumFallbackUser();
+
+    // static
+    doc["asicCount"]          = board->getAsicCount();
+    doc["smallCoreCount"]     = (board->getAsics()) ? board->getAsics()->getSmallCoreCount() : 0;
+    doc["deviceModel"]        = board->getDeviceModel();
+    doc["hostip"]             = SYSTEM_MODULE.getIPAddress();
+    doc["macAddr"]            = SYSTEM_MODULE.getMacAddress();
+    doc["wifiRSSI"]           = SYSTEM_MODULE.get_wifi_rssi();
+
+    // dashboard
+    doc["power"]              = POWER_MANAGEMENT_MODULE.getPower();
+    doc["maxPower"]           = board->getMaxPin();
+    doc["minPower"]           = board->getMinPin();
+    doc["maxVoltage"]         = board->getMaxVin();
+    doc["minVoltage"]         = board->getMinVin();
+    doc["current"]            = POWER_MANAGEMENT_MODULE.getCurrent();           // mA (raw)
+    doc["currentA"]           = POWER_MANAGEMENT_MODULE.getCurrent() / 1000.0f; // A (UI)
+    doc["minCurrentA"]        = board->getMinCurrentA(); // A
+    doc["maxCurrentA"]        = board->getMaxCurrentA(); // A
+    doc["temp"]               = POWER_MANAGEMENT_MODULE.getChipTempMax();
+    doc["vrTemp"]             = POWER_MANAGEMENT_MODULE.getVRTemp();
+    doc["vrTempInt"]          = POWER_MANAGEMENT_MODULE.getVRTempInt();
+    doc["hashRateTimestamp"]  = history->getCurrentTimestamp();
+    // set hashrate values to 0 in shutdown
+    doc["hashRate"]           = !shutdown ? SYSTEM_MODULE.getCurrentHashrate() : 0.0;
+    doc["hashRate_1m"]        = !shutdown ? history->getCurrentHashrate1m()    : 0.0;
+    doc["hashRate_10m"]       = !shutdown ? history->getCurrentHashrate10m()   : 0.0;
+    doc["hashRate_1h"]        = !shutdown ? history->getCurrentHashrate1h()    : 0.0;
+    doc["hashRate_1d"]        = !shutdown ? history->getCurrentHashrate1d()    : 0.0;
+    doc["coreVoltage"]        = board->getAsicVoltageMillis();
+    doc["defaultCoreVoltage"] = board->getDefaultAsicVoltageMillis();
+    doc["coreVoltageActual"]  = (int) (board->getVout() * 1000.0f);
+    doc["fanspeed"]           = POWER_MANAGEMENT_MODULE.getFanPerc();
+    doc["manualFanSpeed"]     = Config::getFanSpeed();
+    doc["fanrpm"]             = POWER_MANAGEMENT_MODULE.getFanRPM(0);
+    doc["fanrpm2"]            = (board->getNumFans() > 1) ? POWER_MANAGEMENT_MODULE.getFanRPM(1) : 0;
+    doc["fanspeed2"]          = (board->getNumFans() > 1) ? POWER_MANAGEMENT_MODULE.getFanPerc(1) : 0;
+    doc["fanCount"]           = board->getNumFans();
+
+
+    doc["lastpingrtt"]        = get_last_ping_rtt();
+    doc["recentpingloss"]     = get_recent_ping_loss();
+    doc["shutdown"]           = POWER_MANAGEMENT_MODULE.isShutdown();
+    JsonObject can_obj = doc["can"].to<JsonObject>();
+    can_obj["hasExtension"] = board->hasCanExtension();
+    can_obj["enabled"]      = Config::isCanEnabled();
+    if (Config::isCanEnabled()) {
+        can_obj["fleetPower"] = POWER_MANAGEMENT_MODULE.getPower() + can_master_get_slave_fleet_power();
+    }
+    doc["duplicateHWNonces"]  = getDuplicateHWNonces();
+
+    JsonObject stratum_obj = doc["stratum"].to<JsonObject>();
+
+    // kept for swarm compatibility
+    doc["poolDifficulty"]     = STRATUM_MANAGER->getPoolDifficulty();
+    doc["networkDifficulty"]  = STRATUM_MANAGER->getNetworkDifficulty();
+    doc["foundBlocks"]        = STRATUM_MANAGER->getFoundBlocks();
+    doc["totalFoundBlocks"]   = STRATUM_MANAGER->getTotalFoundBlocks();
+    doc["sharesAccepted"]     = STRATUM_MANAGER->getSharesAccepted();
+    doc["sharesRejected"]     = STRATUM_MANAGER->getSharesRejected();
+    doc["bestDiff"]           = STRATUM_MANAGER->getBestDiff();
+    doc["bestSessionDiff"]    = STRATUM_MANAGER->getBestSessionDiff();
+
+    STRATUM_MANAGER->getManagerInfoJson(stratum_obj);
+
+    // Block header / coinbase data (one entry per pool)
+    {
+        JsonArray blockHeaders = doc["blockHeaders"].to<JsonArray>();
+        for (int p = 0; p < 2; p++) {
+            const coinbase_result_t cb = STRATUM_MANAGER->getCoinbaseResult(p);
+            if (cb.block_height > 0) {
+                JsonObject bh = blockHeaders.add<JsonObject>();
+                bh["pool"]       = p;
+                bh["blockHeight"] = cb.block_height;
+                bh["networkDifficulty"] = cb.network_difficulty;
+                bh["scriptsig"]  = cb.scriptsig;
+
+                if (Config::getCoinbaseVerifyMode(p) > 0) {
+                    bh["coinbaseValueTotalSatoshis"] = cb.total_value_satoshis;
+                    bh["coinbaseValueUserSatoshis"]  = cb.user_value_satoshis;
+                    bh["verificationOk"] = STRATUM_MANAGER->getVerificationOk(p);
+                    bh["verificationFailCount"] = STRATUM_MANAGER->getVerificationFailCount(p);
+                    bh["verificationCheckCount"] = STRATUM_MANAGER->getVerificationCheckCount(p);
+                }
+            }
+        }
+        doc["coinbaseVerifyMode"]         = Config::getCoinbaseVerifyMode(0);
+        doc["coinbaseMaxFee"]             = Config::getCoinbaseMaxFee(0) / 10.0f;
+        doc["coinbaseVerifyForce"]        = Config::getCoinbaseVerifyForce(0);
+        doc["fallbackCoinbaseVerifyMode"] = Config::getCoinbaseVerifyMode(1);
+        doc["fallbackCoinbaseMaxFee"]     = Config::getCoinbaseMaxFee(1) / 10.0f;
+        doc["fallbackCoinbaseVerifyForce"] = Config::getCoinbaseVerifyForce(1);
+    }
+
+    // asic temps
+    {
+        JsonArray arr = doc["asicTemps"].to<JsonArray>();
+        for (int i=0;i<board->getAsicCount();i++) {
+            arr.add(board->getChipTemp(i));
+        }
+    }
+
+    // If history was requested, add the history data as a nested object
+    if (!shutdown && history_requested) {
+        uint64_t span = history_span_ms;
+        uint64_t end_timestamp = start_timestamp + span;
+        JsonObject json_history = doc["history"].to<JsonObject>();
+
+        History *history = SYSTEM_MODULE.getHistory();
+        history->exportHistoryData(json_history, start_timestamp, end_timestamp, current_timestamp, history_limit);
+    }
+
+    // settings
+    PidSettings *pid = board->getPidSettings();
+    doc["pidTargetTemp"]      = board->isPIDAvailable() ? pid->targetTemp : -1;
+    doc["pidP"]               = (float) pid->p / 100.0f;
+    doc["pidI"]               = (float) pid->i / 100.0f;
+    doc["pidD"]               = (float) pid->d / 100.0f;
+
+    // Per-channel fan settings (new API; ch0 mirrors existing flat fields for compat)
+    {
+        JsonArray fans = doc["fans"].to<JsonArray>();
+        int numFans = board->getNumFans();
+        for (int ch = 0; ch < numFans; ch++) {
+            PidSettings* fanPid = board->getPidSettings(ch);
+            JsonObject fan = fans.add<JsonObject>();
+            fan["label"]        = board->getFanLabel(ch);
+            fan["mode"]         = Config::getFanMode(ch);
+            fan["manualSpeed"]  = Config::getFanManualSpeed(ch);
+            fan["overheatTemp"] = Config::getFanOverheatTemp(ch);
+            fan["rpm"]          = POWER_MANAGEMENT_MODULE.getFanRPM(ch);
+            fan["speedPerc"]    = POWER_MANAGEMENT_MODULE.getFanPerc(ch);
+            JsonObject pid_obj  = fan["pid"].to<JsonObject>();
+            pid_obj["targetTemp"] = board->isPIDAvailable() ? (int) fanPid->targetTemp : -1;
+            pid_obj["p"]          = (float) fanPid->p / 100.0f;
+            pid_obj["i"]          = (float) fanPid->i / 100.0f;
+            pid_obj["d"]          = (float) fanPid->d / 100.0f;
+        }
+    }
+
+    doc["hostname"]           = hostname;
+    doc["ssid"]               = ssid;
+    doc["stratumURL"]         = stratumURL;
+    doc["stratumPort"]        = Config::getStratumPortNumber();
+    doc["stratumUser"]        = stratumUser;
+    doc["stratumEnonceSubscribe"] = Config::isStratumEnonceSubscribe();
+    doc["stratumTLS"]         = Config::isStratumTLS();
+    doc["fallbackStratumURL"] = fallbackStratumURL;
+    doc["fallbackStratumPort"]= Config::getStratumFallbackPortNumber();
+    doc["fallbackStratumUser"] = fallbackStratumUser;
+    doc["fallbackStratumEnonceSubscribe"] = Config::isStratumFallbackEnonceSubscribe();
+    doc["fallbackStratumTLS"] = Config::isStratumFallbackTLS();
+    doc["stratumProtocol"]    = Config::getStratumProtocol();
+    doc["fallbackStratumProtocol"] = Config::getFallbackStratumProtocol();
+    {
+        char *sv2_auth = Config::getSV2AuthorityPubkey();
+        doc["sv2AuthorityPubkey"] = sv2_auth ? sv2_auth : "";
+        safe_free(sv2_auth);
+        char *fb_sv2_auth = Config::getFallbackSV2AuthorityPubkey();
+        doc["fallbackSv2AuthorityPubkey"] = fb_sv2_auth ? fb_sv2_auth : "";
+        safe_free(fb_sv2_auth);
+    }
+    doc["sv2ChannelType"]     = Config::getSV2ChannelType();
+    doc["fallbackSv2ChannelType"] = Config::getFallbackSV2ChannelType();
+    doc["voltage"]            = POWER_MANAGEMENT_MODULE.getVoltage();
+    doc["frequency"]          = board->getAsicFrequency();
+    doc["defaultFrequency"]   = board->getDefaultAsicFrequency();
+    doc["jobInterval"]        = board->getAsicJobIntervalMs();
+    doc["stratumDifficulty"] = Config::getStratumDifficulty();
+    doc["overheat_temp"]      = Config::getOverheatTemp();
+    doc["flipscreen"]         = board->isFlipScreenEnabled() ? 1 : 0;
+    doc["invertscreen"]       = Config::isInvertScreenEnabled() ? 1 : 0; // unused?
+    doc["autoscreenoff"]      = Config::isAutoScreenOffEnabled() ? 1 : 0;
+    doc["invertfanpolarity"]  = board->isInvertFanPolarityEnabled() ? 1 : 0;
+    doc["autofanspeed"]       = Config::getTempControlMode();
+    doc["stratum_keep"]       = Config::isStratumKeepaliveEnabled() ? 1 : 0;
+#ifdef VR_FREQUENCY_ENABLED
+    doc["vrFrequency"]        = board->getVrFrequency();
+    doc["defaultVrFrequency"] = board->getDefaultVrFrequency();
+#endif
+    doc["otp"]                = Config::isOTPEnabled(); // flag if otp is enabled
+
+    // system screen
+    doc["ASICModel"]          = board->getAsicModel();
+    doc["uptimeSeconds"]      = (esp_timer_get_time() - SYSTEM_MODULE.getStartTime()) / 1000000;
+    doc["lastResetReason"]    = SYSTEM_MODULE.getLastResetReason();
+    doc["wifiStatus"]         = SYSTEM_MODULE.getWifiStatus();
+    doc["freeHeap"]           = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    doc["freeHeapInt"]        = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    doc["version"]            = esp_app_get_description()->version;
+    doc["runningPartition"]   = esp_ota_get_running_partition()->label;
+
+    doc["defaultTheme"]       = board->getDefaultTheme();
+
+    //ESP_LOGI(TAG, "allocs: %d, deallocs: %d, reallocs: %d", allocs, deallocs, reallocs);
+
+    // Serialize the JSON document to a String and send it
+    esp_err_t ret = sendJsonResponse(req, doc);
+    doc.clear();
+
+    // Free temporary strings
+    free(ssid);
+    free(hostname);
+    free(stratumURL);
+    free(stratumUser);
+    free(fallbackStratumURL);
+    free(fallbackStratumUser);
+
+    return ret;
+}
+
+
+
+esp_err_t PATCH_update_settings(httpd_req_t *req)
+{
+    // close connection when out of scope
+    ConGuard g(http_server, req);
+
+    if (is_network_allowed(req) != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+    }
+
+    // Set CORS headers
+    if (set_cors_headers(req) != ESP_OK) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    if (validateOTP(req) != ESP_OK) {
+        return ESP_FAIL;
+    }
+
+    PSRAMAllocator allocator;
+    JsonDocument doc(&allocator);
+
+    esp_err_t err = getJsonData(req, doc);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (doc["ssid"].is<const char*>()) {
+        Config::setWifiSSID(doc["ssid"].as<const char*>());
+    }
+    if (doc["wifiPass"].is<const char*>()) {
+        Config::setWifiPass(doc["wifiPass"].as<const char*>());
+    }
+    if (doc["hostname"].is<const char*>()) {
+        Config::setHostname(doc["hostname"].as<const char*>());
+    }
+    if (doc["coreVoltage"].is<uint16_t>()) {
+        uint16_t coreVoltage = doc["coreVoltage"].as<uint16_t>();
+        if (coreVoltage > 0) {
+            Config::setAsicVoltage(coreVoltage);
+        }
+    }
+    if (doc["frequency"].is<uint16_t>()) {
+        uint16_t frequency = doc["frequency"].as<uint16_t>();
+        if (frequency > 0) {
+            Config::setAsicFrequency(frequency);
+        }
+    }
+    if (doc["jobInterval"].is<uint16_t>()) {
+        uint16_t jobInterval = doc["jobInterval"].as<uint16_t>();
+        if (jobInterval > 0) {
+            Config::setAsicJobInterval(jobInterval);
+        }
+    }
+    if (doc["stratumDifficulty"].is<uint32_t>()) {
+        Config::setStratumDifficulty(doc["stratumDifficulty"].as<uint32_t>());
+    }
+    if (doc["flipscreen"].is<bool>()) {
+        Config::setFlipScreen(doc["flipscreen"].as<bool>());
+    }
+    if (doc["overheat_temp"].is<uint16_t>()) {
+        Config::setOverheatTemp(doc["overheat_temp"].as<uint16_t>());
+    }
+    if (doc["invertscreen"].is<bool>()) {
+        Config::setInvertScreen(doc["invertscreen"].as<bool>());
+    }
+    if (doc["invertfanpolarity"].is<bool>()) {
+        Config::setFanPolarity(doc["invertfanpolarity"].as<bool>());
+    }
+    if (doc["autofanspeed"].is<uint16_t>()) {
+        Config::setTempControlMode(doc["autofanspeed"].as<uint16_t>());
+    }
+    if (doc["manualFanSpeed"].is<uint16_t>()) {
+        Config::setFanSpeed(doc["manualFanSpeed"].as<uint16_t>());
+    }
+    if (doc["autoscreenoff"].is<bool>()) {
+        Config::setAutoScreenOff(doc["autoscreenoff"].as<bool>());
+    }
+    if (doc["stratum_keep"].is<bool>() || doc["stratum_keep"].is<int>()) {
+        bool value = doc["stratum_keep"].as<int>() != 0;
+        Config::setStratumKeepaliveEnabled(value);
+        ESP_LOGI("system", "stratum_keep updated via WebUI: %s", value ? "ENABLED" : "DISABLED");
+    }
+    if (doc["canMaster"].is<bool>() || doc["canMaster"].is<int>()) {
+        bool value = doc["canMaster"].as<int>() != 0;
+        Config::setCanEnabled(value);
+        ESP_LOGI("system", "canMaster updated via WebUI: %s", value ? "ENABLED" : "DISABLED");
+    }
+    if (doc["pidTargetTemp"].is<uint16_t>()) {
+        Config::setPidTargetTemp(doc["pidTargetTemp"].as<uint16_t>());
+    }
+    if (doc["pidP"].is<float>()) {
+        Config::setPidP((uint16_t) (doc["pidP"].as<float>() * 100.0f));
+    }
+    if (doc["pidI"].is<float>()) {
+        Config::setPidI((uint16_t) (doc["pidI"].as<float>() * 100.0f));
+    }
+    if (doc["pidD"].is<float>()) {
+        Config::setPidD((uint16_t) (doc["pidD"].as<float>() * 100.0f));
+    }
+#ifdef VR_FREQUENCY_ENABLED
+    if (doc["vrFrequency"].is<uint32_t>()) {
+        Config::setVrFrequency(doc["vrFrequency"].as<uint32_t>());
+    }
+#endif
+
+    // Per-channel fan settings: fans[0] maps to ch0 NVS keys, fans[1] to ch1 NVS keys
+    if (doc["fans"].is<JsonArray>()) {
+        JsonArray fans = doc["fans"].as<JsonArray>();
+        int ch = 0;
+        for (JsonObject fan : fans) {
+            if (ch > 1) break;
+            if (fan["mode"].is<uint16_t>())
+                Config::setFanMode(ch, fan["mode"].as<uint16_t>());
+            if (fan["manualSpeed"].is<uint16_t>())
+                Config::setFanManualSpeed(ch, fan["manualSpeed"].as<uint16_t>());
+            if (fan["overheatTemp"].is<uint16_t>())
+                Config::setFanOverheatTemp(ch, fan["overheatTemp"].as<uint16_t>());
+            if (fan["pid"].is<JsonObject>()) {
+                JsonObject p = fan["pid"].as<JsonObject>();
+                if (p["targetTemp"].is<uint16_t>())
+                    Config::setFanPidTargetTemp(ch, p["targetTemp"].as<uint16_t>());
+                if (p["p"].is<float>())
+                    Config::setFanPidP(ch, (uint16_t) (p["p"].as<float>() * 100.0f));
+                if (p["i"].is<float>())
+                    Config::setFanPidI(ch, (uint16_t) (p["i"].as<float>() * 100.0f));
+                if (p["d"].is<float>())
+                    Config::setFanPidD(ch, (uint16_t) (p["d"].as<float>() * 100.0f));
+            }
+            ch++;
+        }
+    }
+
+    // Coinbase verification settings (per pool) — read old values before saving for change detection
+    bool verifyChanged[2] = {false, false};
+
+    if (doc["coinbaseVerifyMode"].is<uint16_t>()) {
+        verifyChanged[0] |= Config::getCoinbaseVerifyMode(0) != doc["coinbaseVerifyMode"].as<uint16_t>();
+        Config::setCoinbaseVerifyMode(0, doc["coinbaseVerifyMode"].as<uint16_t>());
+    }
+    if (doc["coinbaseMaxFee"].is<float>()) {
+        uint16_t newVal = (uint16_t)roundf(doc["coinbaseMaxFee"].as<float>() * 10.0f);
+        verifyChanged[0] |= Config::getCoinbaseMaxFee(0) != newVal;
+        Config::setCoinbaseMaxFee(0, newVal);
+    }
+    if (doc["coinbaseVerifyForce"].is<bool>()) {
+        verifyChanged[0] |= Config::getCoinbaseVerifyForce(0) != doc["coinbaseVerifyForce"].as<bool>();
+        Config::setCoinbaseVerifyForce(0, doc["coinbaseVerifyForce"].as<bool>());
+    }
+    if (doc["fallbackCoinbaseVerifyMode"].is<uint16_t>()) {
+        verifyChanged[1] |= Config::getCoinbaseVerifyMode(1) != doc["fallbackCoinbaseVerifyMode"].as<uint16_t>();
+        Config::setCoinbaseVerifyMode(1, doc["fallbackCoinbaseVerifyMode"].as<uint16_t>());
+    }
+    if (doc["fallbackCoinbaseMaxFee"].is<float>()) {
+        uint16_t newVal = (uint16_t)roundf(doc["fallbackCoinbaseMaxFee"].as<float>() * 10.0f);
+        verifyChanged[1] |= Config::getCoinbaseMaxFee(1) != newVal;
+        Config::setCoinbaseMaxFee(1, newVal);
+    }
+    if (doc["fallbackCoinbaseVerifyForce"].is<bool>()) {
+        verifyChanged[1] |= Config::getCoinbaseVerifyForce(1) != doc["fallbackCoinbaseVerifyForce"].as<bool>();
+        Config::setCoinbaseVerifyForce(1, doc["fallbackCoinbaseVerifyForce"].as<bool>());
+    }
+
+    // Re-run verification for changed pools, reset stats/block only if settings actually changed
+    for (int i = 0; i < 2; i++) {
+        if (verifyChanged[i]) {
+            STRATUM_MANAGER->clearVerifyBlocked(i);
+            STRATUM_MANAGER->resetVerificationStats(i);
+        }
+        STRATUM_MANAGER->rerunVerification(i);
+    }
+    if (SYSTEM_MODULE.getBoardError() == Board::Error::COINBASE_VERIFY_FAULT &&
+        !STRATUM_MANAGER->isVerifyBlocked(0) && !STRATUM_MANAGER->isVerifyBlocked(1)) {
+        SYSTEM_MODULE.clearBoardError();
+    }
+
+    // save stratum settings
+    STRATUM_MANAGER->saveSettings(doc);
+
+    doc.clear();
+
+    // Signal the end of the response
+    httpd_resp_send_chunk(req, NULL, 0);
+
+    // Reload settings after update
+    Board* board = SYSTEM_MODULE.getBoard();
+    board->loadSettings();
+
+    // Reload fan controller settings (picks up both ch0 and ch1 changes)
+    POWER_MANAGEMENT_MODULE.getFanController().loadSettings();
+
+    // reload settings of system module (and display)
+    SYSTEM_MODULE.loadSettings();
+
+    // reload settings, trigger reconnect if stratum config changed
+    STRATUM_MANAGER->loadSettings();
+
+    return ESP_OK;
+}
+
+esp_err_t GET_system_asic(httpd_req_t *req)
+{
+    // close connection when out of scope
+    ConGuard g(http_server, req);
+
+    if (is_network_allowed(req) != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+    }
+
+    httpd_resp_set_type(req, "application/json");
+
+    // CORS
+    if (set_cors_headers(req) != ESP_OK) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    Board* board = SYSTEM_MODULE.getBoard();
+
+    PSRAMAllocator allocator;
+    JsonDocument doc(&allocator);
+
+    // Basisfelder
+    doc["ASICModel"]        = board->getAsicModel();
+    doc["deviceModel"]      = board->getDeviceModel();
+    doc["asicCount"]        = board->getAsicCount();
+    doc["defaultFrequency"] = board->getDefaultAsicFrequency();
+    doc["defaultVoltage"]   = board->getDefaultAsicVoltageMillis();
+    doc["absMaxFrequency"]  = board->getAbsMaxAsicFrequency();
+    doc["absMaxVoltage"]    = board->getAbsMaxAsicVoltageMillis();
+    doc["ecoFrequency"]     = board->getEcoAsicFrequency();
+    doc["ecoVoltage"]       = board->getEcoAsicVoltageMillis();
+
+    doc["swarmColor"]       = board->getSwarmColorName();
+
+    // frequencyOptions
+    {
+        JsonArray arr = doc["frequencyOptions"].to<JsonArray>();
+        const auto& freqs = board->getFrequencyOptions();
+        for (uint32_t f : freqs) { arr.add(f); }
+    }
+
+    // voltageOptions
+    {
+        JsonArray arr = doc["voltageOptions"].to<JsonArray>();
+        const auto& volts = board->getVoltageOptions();
+        for (uint32_t v : volts) { arr.add(v); }
+    }
+
+    esp_err_t ret = sendJsonResponse(req, doc);
+    doc.clear();
+    return ret;
+}
+
+esp_err_t POST_reset_stats(httpd_req_t *req)
+{
+    ConGuard g(http_server, req);
+
+    if (is_network_allowed(req) != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+    }
+
+    STRATUM_MANAGER->resetSessionStats();
+
+    ESP_LOGI(TAG, "Session stats reset by user");
+    httpd_resp_set_status(req, "204 No Content");
+    return httpd_resp_send(req, NULL, 0);
+}

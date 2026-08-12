@@ -1,0 +1,37 @@
+#pragma once
+
+#include "asic.h"
+#include "bm1366.h"
+#include "board.h"
+
+class BitfortunAxe : public Board {
+  protected:
+    uint8_t ds4432_tps40305_bitaxe_voltage_to_reg(float vout);
+
+  public:
+    BitfortunAxe();
+
+    virtual void shutdown();
+
+    virtual bool initBoard();
+    virtual bool initAsics();
+
+    virtual bool setVoltage(float core_voltage);
+
+    virtual void setFanSpeedCh(int channel, float perc);
+    virtual void getFanSpeedCh(int channel, uint16_t *rpm);
+    virtual void setFanPolarity(bool invert);
+
+    virtual float getTemperature(int index);
+    virtual float getVRTemp();
+    virtual bool isPIDAvailable() { return true; }
+
+    virtual float getVin();
+    virtual float getIin();
+    virtual float getPin();
+    virtual float getVout();
+    virtual float getIout();
+    virtual float getPout();
+    virtual void requestBuckTelemtry();
+    virtual bool selfTest();
+};

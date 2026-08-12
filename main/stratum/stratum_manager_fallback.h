@@ -1,0 +1,111 @@
+#pragma once
+
+#include "stratum_manager.h"
+#include "utils.h"
+
+class StratumManagerFallback : public StratumManager {
+    friend StratumTaskBase; ///< Allows StratumTaskBase to access private members
+
+  protected:
+    int m_selected = 0;
+    uint64_t m_accepted = 0;
+    uint64_t m_rejected = 0;
+    uint32_t m_poolDifficulty = 0;
+    double m_networkDifficulty = 0;
+    uint64_t m_bestSessionDiff = 0;
+
+    virtual void reconnectTimerCallback(int index);
+    virtual void connectedCallback(int index);
+    virtual void disconnectedCallback(int index);
+
+    virtual bool acceptsNotifyFrom(int pool);
+
+    virtual void setPoolDifficulty(int pool, uint32_t diff) {
+        m_poolDifficulty = diff;
+    };
+
+    virtual void setNetworkDifficulty(int pool, uint32_t nbits) {
+        if (nbits != 0) {
+            m_networkDifficulty = calculateNetworkDifficulty(nbits);
+        }
+    }
+
+    virtual void acceptedShare(int pool)
+    {
+        m_accepted++;
+    }
+
+    virtual void rejectedShare(int pool)
+    {
+        m_rejected++;
+    }
+
+    virtual int getPoolMode() {
+        return 0;
+    }
+
+  public:
+    StratumManagerFallback();
+
+    virtual const char *getCurrentPoolHost();
+    virtual int getCurrentPoolPort();
+
+    virtual int getNextActivePool();
+
+    bool isFallback() const override { return true; }
+
+    virtual uint32_t selectAsicDiff(int pool, uint32_t poolDiff);
+
+    virtual void checkForBestDiff(int pool, double diff, uint32_t nbits);
+
+    virtual void getManagerInfoJson(JsonObject &obj);
+
+    virtual void loadSettings();
+    virtual void saveSettings(const JsonDocument &doc);
+
+    // aggregated compatibility methos
+    virtual uint64_t getSharesAccepted() {
+        return m_accepted;
+    };
+
+    virtual uint64_t getSharesRejected() {
+        return m_rejected;
+    }
+
+    virtual uint32_t getPoolDifficulty() {
+        return m_poolDifficulty;
+    };
+
+    virtual double getNetworkDifficulty() {
+        return m_networkDifficulty;
+    }
+
+    virtual void resetSessionStats() override {
+        PThreadGuard lock(m_mutex);
+        m_foundBlocks = 0;
+        m_accepted = 0;
+        m_rejected = 0;
+        m_bestSessionDiff = 0;
+        suffixString(0, m_bestSessionDiffString, DIFF_STRING_SIZE, 0);
+        for (int i = 0; i < 2; i++) {
+            if (m_stratumTasks[i]) m_stratumTasks[i]->m_poolErrors = 0;
+        }
+    }
+
+    virtual int getPoolErrors() {
+        return m_stratumTasks[0]->m_poolErrors + m_stratumTasks[1]->m_poolErrors;
+    }
+
+    virtual bool isUsingFallback()
+    {
+        return m_selected == StratumManager::Selected::SECONDARY;
+    }
+
+    virtual int getCompatPingPoolIndex() {
+        return m_selected;
+    }
+
+    virtual uint64_t getBestSessionDiff() {
+        return m_bestSessionDiff;
+    }
+};
