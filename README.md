@@ -18,7 +18,7 @@ Credits to the devs:
 
 The newest releases are always here:
 
-https://github.com/shufps/ESP-Miner-BitfortunQAxePlus/releases
+[https://github.com/liaojinguu/bitfortun-BS-1
 
 ### Recommended Method: The Webflasher
 
