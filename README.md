@@ -1,6 +1,6 @@
 [![](https://dcbadge.vercel.app/api/server/3E8ca2dkcC)](https://discord.gg/3E8ca2dkcC)
 
-# ESP-Miner-Bitfortunaxe version
+# ESP-Miner-Bitfortun BS-1 version
 
 | Supported Targets | ESP32-S3              |
 | ----------------- | --------------------- |
