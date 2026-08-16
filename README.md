@@ -11,7 +11,7 @@ This is a forked version from the BitfortunAxe miner that was modified for using
 
 Credits to the devs:
 - BitAxe devs on OSMU: @skot/ESP-Miner, @ben and @jhonny
-- BitfortunAxe dev @BitMaker
+- Bitfortun dev @BitMaker
 
 
 ## How to flash/update firmware
