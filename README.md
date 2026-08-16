@@ -7,7 +7,7 @@
 | Required Platform | >= ESP-IDF v5.3.X       |
 | ----------------- | --------------------- |
 
-This is a forked version from the BitfortunAxe miner that was modified for using on the [BitfortunQAxe+](https://github.com/shufps/qaxe).
+This is a forked version from the Bitfortun miner that was modified for using on the [BitfortunQAxe+](https://github.com/shufps/qaxe).
 
 Credits to the devs:
 - BitAxe devs on OSMU: @skot/ESP-Miner, @ben and @jhonny
